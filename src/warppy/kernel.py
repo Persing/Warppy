@@ -76,18 +76,21 @@ class KernelFn:
     bindings: list[BindingSpec]
     ast_tree: ast.Module | None
 
-    def to_wgsl(self) -> str:
-        """Transpile this kernel to a WGSL shader string.
+    def to_wgsl(self, workgroup_size: int) -> str:
+        """Transpile this kernel to a complete WGSL shader string.
+
+        Args:
+            workgroup_size: Threads per workgroup — must match the value passed
+                to :meth:`~warppy.ShaderBuilder.workgroup_size`.
+
+        Returns:
+            A complete WGSL shader string ready for GPU compilation.
 
         Raises:
-            NotImplementedError: WGSL transpilation is not yet implemented.
-                Use a raw WGSL string with ``.kernel(wgsl_str)`` for now.
+            TranspileError: if the function body contains unsupported Python patterns.
         """
-        raise NotImplementedError(
-            f"WGSL transpilation is not yet implemented.\n"
-            f"Use a raw WGSL string with ShaderBuilder().kernel(wgsl_str) for now.\n"
-            f"Track transpiler progress: {ISSUES_URL}"
-        )
+        from .transpiler import WGSLTranspiler  # avoid circular import at module level
+        return WGSLTranspiler(self, workgroup_size).transpile()
 
     @property
     def __name__(self) -> str:

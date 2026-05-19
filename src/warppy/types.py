@@ -136,16 +136,25 @@ def dataclass_to_wgsl_struct(cls: type, struct_name: str | None = None) -> str:
     Raises:
         GPUTypeError: if any field uses an unsupported dtype.
     """
+    import typing
+
     if not dataclasses.is_dataclass(cls):
         raise GPUTypeError(
             f"Expected a dataclass type, got {cls!r}.\n"
             f"Open an issue: {ISSUES_URL}"
         )
+
+    # get_type_hints resolves string annotations from `from __future__ import annotations`
+    try:
+        hints = typing.get_type_hints(cls)
+    except Exception:
+        hints = {}
+
     name = struct_name or cls.__name__
     lines = [f"struct {name} {{"]
+    numpy_scalars = (np.uint32, np.int32, np.float32, np.float16, np.uint16, np.int16)
     for field in dataclasses.fields(cls):
-        annotation = field.type
-        numpy_scalars = (np.uint32, np.int32, np.float32, np.float16, np.uint16, np.int16)
+        annotation = hints.get(field.name, field.type)
         if annotation not in numpy_scalars:
             raise GPUTypeError(
                 f"Field {field.name!r} has annotation {annotation!r} which cannot "

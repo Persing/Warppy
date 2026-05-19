@@ -252,18 +252,18 @@ class ShaderBuilder:
             GPUCompileError: if WGSL validation fails.
             GPUBindingError: if bindings conflict.
         """
+        if self._workgroup_size is None:
+            raise GPUConfigError(
+                "No workgroup size set. Call .workgroup_size(n) before .build().\n"
+                f"Open an issue: {ISSUES_URL}"
+            )
+
         if self._kernel_fn is not None:
-            # Transpiles to WGSL; raises NotImplementedError until transpiler lands
-            self._kernel_wgsl = self._kernel_fn.to_wgsl()
+            self._kernel_wgsl = self._kernel_fn.to_wgsl(self._workgroup_size)
 
         if self._kernel_wgsl is None:
             raise GPUConfigError(
                 "No kernel set. Call .kernel(wgsl_source) or .kernel(gpu_kernel_fn) before .build().\n"
-                f"Open an issue: {ISSUES_URL}"
-            )
-        if self._workgroup_size is None:
-            raise GPUConfigError(
-                "No workgroup size set. Call .workgroup_size(n) before .build().\n"
                 f"Open an issue: {ISSUES_URL}"
             )
         if not self._bindings:

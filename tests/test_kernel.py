@@ -112,13 +112,14 @@ class TestGpuKernelDecorator:
 
         assert k.bindings == []
 
-    def test_to_wgsl_raises_not_implemented(self):
+    def test_to_wgsl_returns_string(self):
         @gpu_kernel
         def k(idx: np.uint32, out: Array[np.float32]) -> None:
             pass
 
-        with pytest.raises(NotImplementedError):
-            k.to_wgsl()
+        wgsl = k.to_wgsl(workgroup_size=256)
+        assert isinstance(wgsl, str)
+        assert "@compute" in wgsl
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +278,15 @@ class TestBuilderKernelFnIntegration:
         builder = ShaderBuilder().workgroup_size(256).kernel(k)
         assert builder._kernel_wgsl is None
 
-    def test_builder_build_raises_not_implemented_for_kernelfn(self):
+    def test_builder_build_with_kernelfn_returns_compiled_shader(self):
+        from warppy import CompiledShader
+
         @gpu_kernel
         def k(idx: np.uint32, out: Array[np.float32]) -> None:
             pass
 
-        with pytest.raises(NotImplementedError):
-            ShaderBuilder().workgroup_size(256).kernel(k).build()
+        shader = ShaderBuilder().workgroup_size(256).kernel(k).build()
+        assert isinstance(shader, CompiledShader)
 
     def test_builder_invalid_source_type_raises(self):
         from warppy.errors import GPUConfigError
