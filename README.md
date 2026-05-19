@@ -24,14 +24,16 @@ shader = (
 result = shader.dispatch(params=Params(...), inputs=[output_buf])
 ```
 
-**Benchmark — 1M card draw Monte Carlo trials (Apple M1 Max):**
+**Benchmark — card draw Monte Carlo, Apple M1 Max (GPU vs. best-effort vectorized NumPy):**
 
-| | Time | Speedup |
-|--|------|---------|
-| CPU (vectorized NumPy) | 2028 ms | 1× |
-| GPU (Warppy) | ~77 ms | **26×** |
+| Trials | CPU (NumPy) | GPU (Warppy) | Speedup |
+|--------|-------------|--------------|---------|
+| 1M     | 2,028 ms    | 77 ms        | 26×     |
+| 10M    | ~17,500 ms  | 88 ms        | **~200×** |
 
-The GPU advantage grows with trial count and kernel complexity. At 10M+ trials the gap widens further.
+The GPU time barely increases from 1M to 10M — the parallelism is saturated, so more work costs almost nothing. The CPU scales linearly. The gap widens with trial count and kernel complexity.
+
+> Pi estimation (simple random sampling): NumPy's SIMD is already near-optimal for that shape of problem. GPU advantage shows on compute-intensive, hard-to-vectorize kernels like the shuffle simulation above.
 
 ---
 
