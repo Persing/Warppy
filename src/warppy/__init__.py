@@ -34,18 +34,28 @@ from .errors import (
     GPUCompileError,
     GPUConfigError,
     GPUTypeError,
+    TranspileError,
     WarpyError,
 )
+from .kernel import Array, ArraySpec, KernelFn, gpu_kernel
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
+    # V1 — builder API
     "ShaderBuilder",
     "CompiledShader",
     "GPUResult",
+    # V2 — annotated kernel API
+    "gpu_kernel",
+    "Array",
+    "ArraySpec",
+    "KernelFn",
+    # Errors
     "WarpyError",
     "GPUCompileError",
     "GPUTypeError",
     "GPUBindingError",
     "GPUConfigError",
+    "TranspileError",
 ]

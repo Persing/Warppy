@@ -44,3 +44,12 @@ class GPUConfigError(WarpyError):
     Raised by `.build()` when required configuration is missing (no kernel,
     no bindings, invalid workgroup size, etc.).
     """
+
+
+class TranspileError(WarpyError):
+    """Failed to transpile a @gpu_kernel function to WGSL.
+
+    Raised at decoration time when a function violates annotation requirements,
+    uses an unsupported parameter type, or contains a Python pattern that cannot
+    be converted to WGSL (e.g. recursion, dynamic dispatch, list comprehensions).
+    """

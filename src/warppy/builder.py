@@ -13,6 +13,7 @@ import numpy as np
 
 from .bindings import BindingKind, BindingSpec, validate_bindings
 from .errors import GPUBindingError, GPUConfigError, ISSUES_URL
+from .kernel import KernelFn
 from .types import pack_dataclass
 
 
@@ -129,6 +130,7 @@ class ShaderBuilder:
         self._bindings: list[BindingSpec] = []
         self._workgroup_size: int | None = None
         self._kernel_wgsl: str | None = None
+        self._kernel_fn: KernelFn | None = None
 
     def bind_uniform(self, group: int, binding: int, dataclass_type: type) -> ShaderBuilder:
         """Declare a uniform binding backed by a dataclass.
@@ -200,22 +202,40 @@ class ShaderBuilder:
         self._workgroup_size = size
         return self
 
-    def kernel(self, wgsl: str) -> ShaderBuilder:
-        """Set the WGSL compute kernel source.
+    def kernel(self, source: str | KernelFn) -> ShaderBuilder:
+        """Set the compute kernel — either a raw WGSL string or a @gpu_kernel function.
 
         Args:
-            wgsl: Complete WGSL shader source containing an ``@compute`` entry point
-                named ``main``.
+            source: Either a complete WGSL shader string (V1 path), or a
+                :class:`~warppy.KernelFn` produced by :func:`~warppy.gpu_kernel`
+                (V2 path). When a ``KernelFn`` is passed, bindings are inferred
+                automatically from its type annotations and any prior
+                ``.bind_uniform()`` / ``.bind_storage()`` calls are replaced.
 
         Returns:
             self (for chaining)
+
+        Raises:
+            GPUConfigError: if source is neither a non-empty string nor a KernelFn.
         """
-        if not isinstance(wgsl, str) or not wgsl.strip():
+        if isinstance(source, str):
+            if not source.strip():
+                raise GPUConfigError(
+                    f"kernel() expects a non-empty WGSL string.\n"
+                    f"Open an issue: {ISSUES_URL}"
+                )
+            self._kernel_wgsl = source
+            self._kernel_fn = None
+        elif isinstance(source, KernelFn):
+            self._kernel_fn = source
+            self._kernel_wgsl = None  # resolved at .build() time via to_wgsl()
+            self._bindings = list(source.bindings)
+        else:
             raise GPUConfigError(
-                f"kernel() expects a non-empty WGSL string.\n"
+                f"kernel() expects a WGSL string or @gpu_kernel-decorated function, "
+                f"got {type(source).__name__!r}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        self._kernel_wgsl = wgsl
         return self
 
     def build(self) -> CompiledShader:
@@ -232,9 +252,13 @@ class ShaderBuilder:
             GPUCompileError: if WGSL validation fails.
             GPUBindingError: if bindings conflict.
         """
+        if self._kernel_fn is not None:
+            # Transpiles to WGSL; raises NotImplementedError until transpiler lands
+            self._kernel_wgsl = self._kernel_fn.to_wgsl()
+
         if self._kernel_wgsl is None:
             raise GPUConfigError(
-                "No kernel set. Call .kernel(wgsl_source) before .build().\n"
+                "No kernel set. Call .kernel(wgsl_source) or .kernel(gpu_kernel_fn) before .build().\n"
                 f"Open an issue: {ISSUES_URL}"
             )
         if self._workgroup_size is None:
