@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """wgpu-py GPU backend — ALL wgpu-py imports are isolated to this file.
 
 No other warppy module imports wgpu directly. This isolation ensures that:

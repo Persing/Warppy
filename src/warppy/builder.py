@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """ShaderBuilder — fluent API for constructing GPU compute shaders."""
 
 from __future__ import annotations

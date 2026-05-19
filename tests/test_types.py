@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Tests for dtype mapping and struct serialization — no GPU required."""
 
 from __future__ import annotations

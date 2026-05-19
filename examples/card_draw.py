@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Card draw Monte Carlo — warppy API version.
 
 Estimates the probability that a 5-card hand dealt from a shuffled 52-card deck

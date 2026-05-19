@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """numpy dtype <-> WGSL scalar type mapping and struct serialization."""
 
 from __future__ import annotations

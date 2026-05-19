@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Warppy — Python GPU compute via a fluent builder API.
 
 Abstracts wgpu-py boilerplate so you can focus on your WGSL kernel,

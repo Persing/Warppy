@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """
 Phase 0 validation spike — raw wgpu-py card draw Monte Carlo.
 

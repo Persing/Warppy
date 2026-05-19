@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Monte Carlo pi estimation — warppy API.
 
 Each GPU thread samples one random point (x, y) in [0,1)² and checks whether

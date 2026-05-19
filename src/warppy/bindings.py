@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Binding specification types for ShaderBuilder."""
 
 from __future__ import annotations

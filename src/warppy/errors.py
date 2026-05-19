@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Nick Persing
+# Licensed under the MIT License. See LICENSE for details.
+
 """Warppy error classes.
 
 Every error answers three questions: what went wrong, where, and what to do.
