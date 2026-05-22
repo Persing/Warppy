@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Any
+from typing import Any, overload
 
 import numpy as np
 
@@ -117,8 +117,8 @@ class ShaderBuilder:
 
         shader = (
             ShaderBuilder()
-            .bind_uniform(0, 0, Params)
-            .bind_storage(0, 1, np.uint32)
+            .bind_uniform(0, Params)
+            .bind_storage(1, np.uint32)
             .workgroup_size(256)
             .kernel(WGSL_SOURCE)
             .build()
@@ -132,49 +132,101 @@ class ShaderBuilder:
         self._kernel_wgsl: str | None = None
         self._kernel_fn: KernelFn | None = None
 
-    def bind_uniform(self, group: int, binding: int, dataclass_type: type) -> ShaderBuilder:
+    @overload
+    def bind_uniform(self, binding: int, dataclass_type: type) -> ShaderBuilder: ...
+    @overload
+    def bind_uniform(self, group: int, binding: int, dataclass_type: type) -> ShaderBuilder: ...
+
+    def bind_uniform(
+        self,
+        binding_or_group: int,
+        type_or_binding: type | int,
+        dataclass_type: type | None = None,
+    ) -> ShaderBuilder:
         """Declare a uniform binding backed by a dataclass.
 
+        The canonical 2-argument form assumes bind group 0, which covers the
+        vast majority of compute shaders::
+
+            .bind_uniform(0, Params)   # binding=0, group=0 (default)
+            .bind_uniform(1, Params)   # binding=1, group=0 (default)
+
+        Pass an explicit group as the first argument when you need multiple
+        bind groups::
+
+            .bind_uniform(0, 0, Params)   # group=0, binding=0
+            .bind_uniform(1, 0, Params)   # group=1, binding=0
+
         Args:
-            group: WebGPU bind group index (use 0 for simple shaders).
-            binding: Binding index within the group.
-            dataclass_type: A ``@dataclass`` class whose fields will be serialized
-                into the uniform buffer. All fields must be numpy scalar types.
+            binding_or_group: Binding index (2-arg form) or bind group index (3-arg form).
+            type_or_binding: ``@dataclass`` type (2-arg form) or binding index (3-arg form).
+            dataclass_type: ``@dataclass`` type — only passed in the 3-arg form.
 
         Returns:
             self (for chaining)
 
         Raises:
-            GPUBindingError: if group or binding is negative.
+            GPUBindingError: if the type is not a ``@dataclass``, or if group/binding is negative.
         """
-        if not dataclasses.is_dataclass(dataclass_type):
+        if dataclass_type is None:
+            group, binding, dc_type = 0, binding_or_group, type_or_binding
+        else:
+            group, binding, dc_type = binding_or_group, type_or_binding, dataclass_type  # type: ignore[assignment]
+
+        if not dataclasses.is_dataclass(dc_type):
             raise GPUBindingError(
-                f"bind_uniform() expects a @dataclass type, got {dataclass_type!r}.\n"
+                f"bind_uniform() expects a @dataclass type, got {dc_type!r}.\n"
                 f"Decorate your params class with @dataclass.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
         self._bindings.append(
-            BindingSpec(group=group, binding=binding, kind=BindingKind.UNIFORM, payload=dataclass_type)
+            BindingSpec(group=group, binding=binding, kind=BindingKind.UNIFORM, payload=dc_type)
         )
         return self
 
-    def bind_storage(self, group: int, binding: int, dtype: Any) -> ShaderBuilder:
+    @overload
+    def bind_storage(self, binding: int, dtype: Any) -> ShaderBuilder: ...
+    @overload
+    def bind_storage(self, group: int, binding: int, dtype: Any) -> ShaderBuilder: ...
+
+    def bind_storage(
+        self,
+        binding_or_group: int,
+        dtype_or_binding: Any,
+        dtype: Any | None = None,
+    ) -> ShaderBuilder:
         """Declare a read-write storage buffer binding.
 
+        The canonical 2-argument form assumes bind group 0::
+
+            .bind_storage(1, np.uint32)    # binding=1, group=0 (default)
+            .bind_storage(2, np.float32)   # binding=2, group=0 (default)
+
+        Pass an explicit group as the first argument when you need multiple
+        bind groups::
+
+            .bind_storage(0, 1, np.uint32)   # group=0, binding=1
+            .bind_storage(1, 0, np.uint32)   # group=1, binding=0
+
         Args:
-            group: WebGPU bind group index (use 0 for simple shaders).
-            binding: Binding index within the group.
-            dtype: numpy dtype (e.g. ``np.uint32``, ``np.float32``) for buffer elements.
+            binding_or_group: Binding index (2-arg form) or bind group index (3-arg form).
+            dtype_or_binding: numpy dtype (2-arg form) or binding index (3-arg form).
+            dtype: numpy dtype — only passed in the 3-arg form.
 
         Returns:
             self (for chaining)
 
         Raises:
-            GPUTypeError: if dtype is not supported.
+            GPUTypeError: if dtype is not a supported numpy type.
             GPUBindingError: if group or binding is negative.
         """
+        if dtype is None:
+            group, binding, actual_dtype = 0, binding_or_group, dtype_or_binding
+        else:
+            group, binding, actual_dtype = binding_or_group, dtype_or_binding, dtype
+
         self._bindings.append(
-            BindingSpec(group=group, binding=binding, kind=BindingKind.STORAGE, payload=np.dtype(dtype))
+            BindingSpec(group=group, binding=binding, kind=BindingKind.STORAGE, payload=np.dtype(actual_dtype))
         )
         return self
 

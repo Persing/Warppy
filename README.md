@@ -15,8 +15,8 @@ Running a GPU compute shader in raw wgpu-py takes **36 lines of boilerplate** be
 ```python
 shader = (
     ShaderBuilder()
-    .bind_uniform(0, 0, Params)
-    .bind_storage(0, 1, np.uint32)
+    .bind_uniform(0, Params)
+    .bind_storage(1, np.uint32)
     .workgroup_size(256)
     .kernel(WGSL)
     .build()
@@ -75,8 +75,8 @@ output_buf = np.zeros(N, dtype=np.uint32)
 
 shader = (
     ShaderBuilder()
-    .bind_uniform(0, 0, Params)
-    .bind_storage(0, 1, np.uint32)
+    .bind_uniform(0, Params)
+    .bind_storage(1, np.uint32)
     .workgroup_size(256)
     .kernel(WGSL)
     .build()
@@ -95,8 +95,10 @@ print(f"{result.elapsed_ms:.1f} ms")
 
 | Method | Description |
 |--------|-------------|
-| `.bind_uniform(group, binding, dataclass_type)` | Uniform buffer backed by a `@dataclass` |
-| `.bind_storage(group, binding, dtype)` | Read-write storage buffer for numpy arrays |
+| `.bind_uniform(binding, dataclass_type)` | Uniform buffer backed by a `@dataclass` (group 0) |
+| `.bind_uniform(group, binding, dataclass_type)` | Same — explicit group for multi-bind-group shaders |
+| `.bind_storage(binding, dtype)` | Read-write storage buffer for numpy arrays (group 0) |
+| `.bind_storage(group, binding, dtype)` | Same — explicit group for multi-bind-group shaders |
 | `.workgroup_size(n)` | Threads per workgroup — must match `@workgroup_size` in WGSL |
 | `.kernel(wgsl)` | WGSL compute shader source |
 | `.build()` | Validate and compile — returns `CompiledShader` |

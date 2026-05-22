@@ -572,7 +572,7 @@ class TestBuilderIntegration:
         """
         v1_shader = (
             ShaderBuilder()
-            .bind_storage(0, 0, np.float32)
+            .bind_storage(0, np.float32)
             .workgroup_size(64)
             .kernel(wgsl_str)
             .build()

@@ -80,8 +80,8 @@ def run(num_trials: int = 10_000_000, rng_seed: int = 0xC0FFEE) -> None:
 
     shader = (
         ShaderBuilder()
-        .bind_uniform(0, 0, Params)
-        .bind_storage(0, 1, np.uint32)
+        .bind_uniform(0, Params)
+        .bind_storage(1, np.uint32)
         .workgroup_size(256)
         .kernel(WGSL)
         .build()

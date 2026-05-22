@@ -104,8 +104,8 @@ def run() -> None:
 
     shader = (
         ShaderBuilder()
-        .bind_uniform(0, 0, Params)
-        .bind_storage(0, 1, np.uint32)
+        .bind_uniform(0, Params)
+        .bind_storage(1, np.uint32)
         .workgroup_size(WORKGROUP_SIZE)
         .kernel(WGSL)
         .build()

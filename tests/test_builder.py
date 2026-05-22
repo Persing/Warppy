@@ -29,7 +29,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) { output[gid.x] = 0u; }
 
 class TestShaderBuilderState:
     def test_bind_uniform_stores_spec(self):
-        builder = ShaderBuilder().bind_uniform(0, 0, Params)
+        builder = ShaderBuilder().bind_uniform(0, Params)
         assert len(builder._bindings) == 1
         assert builder._bindings[0].kind == BindingKind.UNIFORM
         assert builder._bindings[0].group == 0
@@ -37,7 +37,7 @@ class TestShaderBuilderState:
         assert builder._bindings[0].payload is Params
 
     def test_bind_storage_stores_spec(self):
-        builder = ShaderBuilder().bind_storage(0, 1, np.uint32)
+        builder = ShaderBuilder().bind_storage(1, np.uint32)
         assert len(builder._bindings) == 1
         assert builder._bindings[0].kind == BindingKind.STORAGE
 
@@ -51,15 +51,15 @@ class TestShaderBuilderState:
 
     def test_method_chaining_returns_builder(self):
         builder = ShaderBuilder()
-        result = builder.bind_storage(0, 0, np.uint32)
+        result = builder.bind_storage(0, np.uint32)
         assert result is builder
 
     def test_multiple_bindings_stored_in_order(self):
         builder = (
             ShaderBuilder()
-            .bind_uniform(0, 0, Params)
-            .bind_storage(0, 1, np.uint32)
-            .bind_storage(0, 2, np.float32)
+            .bind_uniform(0, Params)
+            .bind_storage(1, np.uint32)
+            .bind_storage(2, np.float32)
         )
         assert len(builder._bindings) == 3
         assert builder._bindings[0].binding == 0
@@ -67,14 +67,74 @@ class TestShaderBuilderState:
         assert builder._bindings[2].binding == 2
 
 
+class TestBindTwoArgForm:
+    """The canonical 2-arg form: group defaults to 0."""
+
+    def test_bind_uniform_defaults_group_zero(self):
+        builder = ShaderBuilder().bind_uniform(0, Params)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 0
+
+    def test_bind_uniform_binding_index_respected(self):
+        builder = ShaderBuilder().bind_uniform(3, Params)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 3
+
+    def test_bind_storage_defaults_group_zero(self):
+        builder = ShaderBuilder().bind_storage(1, np.float32)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 1
+
+    def test_bind_storage_binding_index_respected(self):
+        builder = ShaderBuilder().bind_storage(5, np.uint32)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 5
+
+
+class TestBindThreeArgForm:
+    """The 3-arg override: explicit group for multi-bind-group shaders."""
+
+    def test_bind_uniform_explicit_group_zero(self):
+        builder = ShaderBuilder().bind_uniform(0, 0, Params)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 0
+
+    def test_bind_uniform_explicit_group_one(self):
+        builder = ShaderBuilder().bind_uniform(1, 0, Params)
+        assert builder._bindings[0].group == 1
+        assert builder._bindings[0].binding == 0
+
+    def test_bind_storage_explicit_group_zero(self):
+        builder = ShaderBuilder().bind_storage(0, 1, np.uint32)
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[0].binding == 1
+
+    def test_bind_storage_explicit_group_one(self):
+        builder = ShaderBuilder().bind_storage(1, 0, np.float32)
+        assert builder._bindings[0].group == 1
+        assert builder._bindings[0].binding == 0
+
+    def test_multi_group_bindings_no_duplicate_across_groups(self):
+        """Same binding index in different groups should not raise."""
+        builder = (
+            ShaderBuilder()
+            .bind_storage(0, 0, np.uint32)
+            .bind_storage(1, 0, np.float32)
+        )
+        assert builder._bindings[0].group == 0
+        assert builder._bindings[1].group == 1
+        assert builder._bindings[0].binding == 0
+        assert builder._bindings[1].binding == 0
+
+
 class TestShaderBuilderValidation:
     def test_build_without_kernel_raises(self):
         with pytest.raises(GPUConfigError, match="No kernel set"):
-            ShaderBuilder().bind_storage(0, 0, np.uint32).workgroup_size(64).build()
+            ShaderBuilder().bind_storage(0, np.uint32).workgroup_size(64).build()
 
     def test_build_without_workgroup_size_raises(self):
         with pytest.raises(GPUConfigError, match="No workgroup size"):
-            ShaderBuilder().bind_storage(0, 0, np.uint32).kernel(MINIMAL_WGSL).build()
+            ShaderBuilder().bind_storage(0, np.uint32).kernel(MINIMAL_WGSL).build()
 
     def test_build_without_bindings_raises(self):
         with pytest.raises(GPUConfigError, match="No bindings"):
@@ -84,14 +144,18 @@ class TestShaderBuilderValidation:
         with pytest.raises(GPUBindingError, match="Duplicate binding"):
             (
                 ShaderBuilder()
-                .bind_storage(0, 0, np.uint32)
-                .bind_storage(0, 0, np.float32)
+                .bind_storage(0, np.uint32)
+                .bind_storage(0, np.float32)
                 .workgroup_size(64)
                 .kernel(MINIMAL_WGSL)
                 .build()
             )
 
     def test_bind_uniform_non_dataclass_raises(self):
+        with pytest.raises(GPUBindingError, match="dataclass"):
+            ShaderBuilder().bind_uniform(0, dict)
+
+    def test_bind_uniform_non_dataclass_raises_three_arg(self):
         with pytest.raises(GPUBindingError, match="dataclass"):
             ShaderBuilder().bind_uniform(0, 0, dict)
 
@@ -109,5 +173,5 @@ class TestShaderBuilderValidation:
 
     def test_all_error_messages_include_issues_link(self):
         with pytest.raises(GPUConfigError) as exc_info:
-            ShaderBuilder().bind_storage(0, 0, np.uint32).workgroup_size(64).build()
+            ShaderBuilder().bind_storage(0, np.uint32).workgroup_size(64).build()
         assert "github.com" in str(exc_info.value)

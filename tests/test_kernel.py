@@ -303,7 +303,7 @@ class TestBuilderKernelFnIntegration:
         """
         builder = (
             ShaderBuilder()
-            .bind_storage(0, 0, np.uint32)
+            .bind_storage(0, np.uint32)
             .workgroup_size(64)
             .kernel(wgsl)
         )

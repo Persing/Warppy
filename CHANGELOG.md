@@ -14,8 +14,10 @@ First public release.
 
 **Core API**
 - `ShaderBuilder` — fluent builder for GPU compute shaders with method chaining
-- `.bind_uniform(group, binding, dataclass_type)` — uniform buffer backed by a `@dataclass`
-- `.bind_storage(group, binding, dtype)` — read-write storage buffer for numpy arrays
+- `.bind_uniform(binding, dataclass_type)` — uniform buffer backed by a `@dataclass`; group defaults to 0
+- `.bind_uniform(group, binding, dataclass_type)` — same with explicit bind group (advanced use)
+- `.bind_storage(binding, dtype)` — read-write storage buffer for numpy arrays; group defaults to 0
+- `.bind_storage(group, binding, dtype)` — same with explicit bind group (advanced use)
 - `.workgroup_size(n)` — threads per workgroup (must match WGSL `@workgroup_size`)
 - `.kernel(wgsl)` — raw WGSL compute shader source
 - `.build()` — validates configuration and returns a `CompiledShader`
