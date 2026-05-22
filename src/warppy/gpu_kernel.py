@@ -89,7 +89,7 @@ class KernelFn:
         Raises:
             TranspileError: if the function body contains unsupported Python patterns.
         """
-        from .transpiler import WGSLTranspiler  # avoid circular import at module level
+        from .transpiler import WGSLTranspiler
         return WGSLTranspiler(self, workgroup_size).transpile()
 
     @property

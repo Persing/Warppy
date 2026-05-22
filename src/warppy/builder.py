@@ -13,7 +13,7 @@ import numpy as np
 
 from .bindings import BindingKind, BindingSpec, validate_bindings
 from .errors import GPUBindingError, GPUConfigError, ISSUES_URL
-from .kernel import KernelFn
+from .gpu_kernel import KernelFn
 from .types import pack_dataclass
 
 

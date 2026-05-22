@@ -37,7 +37,7 @@ from .errors import (
     TranspileError,
     WarpyError,
 )
-from .kernel import Array, ArraySpec, KernelFn, gpu_kernel
+from .gpu_kernel import Array, ArraySpec, KernelFn, gpu_kernel
 
 __version__ = "0.2.0"
 
