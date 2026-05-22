@@ -1,14 +1,19 @@
 # Copyright (c) 2026 Nick Persing
 # Licensed under the MIT License. See LICENSE for details.
 
-"""AST statement and expression walker for the WGSL transpiler."""
+"""AST statement and expression walker for the WGSL transpiler.
+
+Uses the visitor pattern (ast.NodeVisitor) so that V2.4+ call-graph walking
+slots in without restructuring: new node handlers are added as visit_X methods
+rather than by extending an isinstance chain.
+"""
 
 from __future__ import annotations
 
 import ast
 
 from ..errors import ISSUES_URL, TranspileError
-from .type_checker import _NP_TYPE_MAP
+from .type_checker import _NP_TYPE_MAP, _SCALAR_TYPES
 
 
 _BINOP_MAP: dict[type, str] = {
@@ -47,24 +52,6 @@ _BUILTIN_FN_MAP: dict[str, str] = {
 }
 
 
-def _transpile_constant(expr: ast.Constant) -> str:
-    val = expr.value
-    if isinstance(val, bool):
-        return "true" if val else "false"
-    if isinstance(val, int):
-        return str(val)
-    if isinstance(val, float):
-        s = repr(val)
-        if "." not in s and "e" not in s:
-            s += ".0"
-        return s
-    raise TranspileError(
-        f"Unsupported literal type {type(val).__name__!r}: {val!r}.\n"
-        f"Supported literal types: int, float, bool.\n"
-        f"Open an issue: {ISSUES_URL}"
-    )
-
-
 def _unsupported_stmt(stmt_name: str, fn_name: str) -> None:
     _UNSUPPORTED_HINTS: dict[str, str] = {
         "Try": "try/except is not supported — GPU kernels cannot raise exceptions.",
@@ -94,72 +81,109 @@ def _unsupported_stmt(stmt_name: str, fn_name: str) -> None:
     )
 
 
-class ASTWalker:
-    """Mixin: transpiles Python AST statements and expressions to WGSL."""
+class ASTWalker(ast.NodeVisitor):
+    """Mixin: transpiles Python AST statements and expressions to WGSL.
+
+    Implements the visitor pattern so new node handlers (e.g. for call-graph
+    analysis in V2.4) are added as ``visit_X`` methods rather than extending
+    an isinstance chain.
+
+    Statement visitors return ``list[str]`` (WGSL lines).
+    Expression visitors return ``str`` (WGSL expression).
+    """
+
+    # Current indentation level — set by _transpile_stmt and managed by
+    # block-entering visitors (visit_If, visit_For).
+    _indent: int = 0
+
+    # ------------------------------------------------------------------
+    # Public wrappers — preserve codegen.py's calling convention
+    # ------------------------------------------------------------------
 
     def _transpile_stmt(self, stmt: ast.stmt, indent: int) -> list[str]:
-        if isinstance(stmt, ast.AnnAssign):
-            return self._transpile_ann_assign(stmt, indent)
-        if isinstance(stmt, ast.Assign):
-            return self._transpile_assign(stmt, indent)
-        if isinstance(stmt, ast.AugAssign):
-            return self._transpile_aug_assign(stmt, indent)
-        if isinstance(stmt, ast.Return):
-            return self._transpile_return(stmt, indent)
-        if isinstance(stmt, ast.If):
-            return self._transpile_if(stmt, indent)
-        if isinstance(stmt, ast.For):
-            return self._transpile_for(stmt, indent)
-        if isinstance(stmt, ast.Expr):
-            prefix = "    " * indent
-            return [f"{prefix}{self._transpile_expr(stmt.value)};"]
-        if isinstance(stmt, ast.Pass):
-            return []
+        self._indent = indent
+        return self.visit(stmt)
 
-        _unsupported_stmt(type(stmt).__name__, self._kfn.__name__)
+    def _transpile_expr(self, expr: ast.expr) -> str:
+        return self.visit(expr)
 
-    def _transpile_ann_assign(self, stmt: ast.AnnAssign, indent: int) -> list[str]:
-        prefix = "    " * indent
-        if not isinstance(stmt.target, ast.Name):
+    # ------------------------------------------------------------------
+    # Fallback — unsupported node types
+    # ------------------------------------------------------------------
+
+    def generic_visit(self, node: ast.AST):  # type: ignore[override]
+        if isinstance(node, ast.expr):
+            raise TranspileError(
+                f"Unsupported expression {type(node).__name__!r} in {self._kfn.__name__!r}.\n"
+                f"Supported: literals, names, arithmetic, comparisons, "
+                f"array indexing, attribute access, function calls.\n"
+                f"Open an issue: {ISSUES_URL}"
+            )
+        _unsupported_stmt(type(node).__name__, self._kfn.__name__)
+
+    # ------------------------------------------------------------------
+    # Statement visitors (return list[str])
+    # ------------------------------------------------------------------
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> list[str]:
+        prefix = "    " * self._indent
+        if not isinstance(node.target, ast.Name):
             raise TranspileError(
                 f"Annotated assignment target must be a simple variable name.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        name = stmt.target.id
-        wgsl_type = self._resolve_annotation(stmt.annotation)
+        name = node.target.id
+        wgsl_type = self._resolve_annotation(node.annotation)
+
+        # Type check: declared type must match RHS type when both are known scalars.
+        if node.value is not None:
+            rhs_type = self._infer_type(node.value)
+            if (
+                rhs_type is not None
+                and rhs_type in _SCALAR_TYPES
+                and wgsl_type in _SCALAR_TYPES
+                and rhs_type != wgsl_type
+            ):
+                raise TranspileError(
+                    f"Type mismatch in {self._kfn.__name__!r}: "
+                    f"{name!r} is declared as {wgsl_type!r} but the value has type {rhs_type!r}.\n"
+                    f"Cast the value explicitly: np.<type>(value).\n"
+                    f"Open an issue: {ISSUES_URL}"
+                )
+
         self._type_env[name] = wgsl_type
 
-        if stmt.value is None:
+        if node.value is None:
             return [f"{prefix}var {name}: {wgsl_type};"]
-        value_str = self._transpile_expr(stmt.value)
+        value_str = self.visit(node.value)
         return [f"{prefix}var {name}: {wgsl_type} = {value_str};"]
 
-    def _transpile_assign(self, stmt: ast.Assign, indent: int) -> list[str]:
-        prefix = "    " * indent
-        if len(stmt.targets) != 1:
+    def visit_Assign(self, node: ast.Assign) -> list[str]:
+        prefix = "    " * self._indent
+        if len(node.targets) != 1:
             raise TranspileError(
                 f"Multiple-target assignment (a = b = expr) is not supported.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        target_str = self._transpile_expr(stmt.targets[0])
-        value_str = self._transpile_expr(stmt.value)
+        target_str = self.visit(node.targets[0])
+        value_str = self.visit(node.value)
         return [f"{prefix}{target_str} = {value_str};"]
 
-    def _transpile_aug_assign(self, stmt: ast.AugAssign, indent: int) -> list[str]:
-        prefix = "    " * indent
-        op_str = _BINOP_MAP.get(type(stmt.op))
+    def visit_AugAssign(self, node: ast.AugAssign) -> list[str]:
+        prefix = "    " * self._indent
+        op_str = _BINOP_MAP.get(type(node.op))
         if op_str is None:
             raise TranspileError(
-                f"Unsupported augmented assignment operator {type(stmt.op).__name__!r}.\n"
+                f"Unsupported augmented assignment operator {type(node.op).__name__!r}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        target_str = self._transpile_expr(stmt.target)
-        value_str = self._transpile_expr(stmt.value)
+        target_str = self.visit(node.target)
+        value_str = self.visit(node.value)
         return [f"{prefix}{target_str} {op_str}= {value_str};"]
 
-    def _transpile_return(self, stmt: ast.Return, indent: int) -> list[str]:
-        prefix = "    " * indent
-        if stmt.value is not None:
+    def visit_Return(self, node: ast.Return) -> list[str]:
+        prefix = "    " * self._indent
+        if node.value is not None:
             raise TranspileError(
                 f"@gpu_kernel functions cannot return a value.\n"
                 f"Write results into an Array parameter instead.\n"
@@ -167,61 +191,68 @@ class ASTWalker:
             )
         return [f"{prefix}return;"]
 
-    def _transpile_if(self, stmt: ast.If, indent: int) -> list[str]:
-        prefix = "    " * indent
-        cond = self._transpile_expr(stmt.test)
+    def visit_If(self, node: ast.If) -> list[str]:
+        prefix = "    " * self._indent
+        cond = self.visit(node.test)
         lines = [f"{prefix}if ({cond}) {{"]
-        for s in stmt.body:
-            lines.extend(self._transpile_stmt(s, indent + 1))
 
-        if stmt.orelse:
-            if len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
-                else_lines = self._transpile_if(stmt.orelse[0], indent)
+        saved = self._indent
+        self._indent += 1
+        for s in node.body:
+            lines.extend(self.visit(s))
+        self._indent = saved
+
+        if node.orelse:
+            if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+                # elif branch — visit at the same indent level, then stitch
+                else_lines = self.visit(node.orelse[0])
                 lines.append(f"{prefix}}} else {else_lines[0].lstrip()}")
                 lines.extend(else_lines[1:])
             else:
                 lines.append(f"{prefix}}} else {{")
-                for s in stmt.orelse:
-                    lines.extend(self._transpile_stmt(s, indent + 1))
+                self._indent += 1
+                for s in node.orelse:
+                    lines.extend(self.visit(s))
+                self._indent = saved
                 lines.append(f"{prefix}}}")
         else:
             lines.append(f"{prefix}}}")
         return lines
 
-    def _transpile_for(self, stmt: ast.For, indent: int) -> list[str]:
-        prefix = "    " * indent
-        if not isinstance(stmt.target, ast.Name):
+    def visit_For(self, node: ast.For) -> list[str]:
+        prefix = "    " * self._indent
+        if not isinstance(node.target, ast.Name):
             raise TranspileError(
                 f"For loop target must be a simple variable name.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        if stmt.orelse:
+        if node.orelse:
             raise TranspileError(
                 f"For/else loops are not supported in @gpu_kernel functions.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
 
-        loop_var = stmt.target.id
+        loop_var = node.target.id
 
         if not (
-            isinstance(stmt.iter, ast.Call)
-            and isinstance(stmt.iter.func, ast.Name)
-            and stmt.iter.func.id == "range"
+            isinstance(node.iter, ast.Call)
+            and isinstance(node.iter.func, ast.Name)
+            and node.iter.func.id == "range"
         ):
             raise TranspileError(
-                f"For loops must iterate over range(). Got {ast.unparse(stmt.iter)!r}.\n"
+                f"For loops must iterate over range(). Got {ast.unparse(node.iter)!r}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
 
-        args = stmt.iter.args
+        args = node.iter.args
         if len(args) == 1:
-            start, stop, step = "0", self._transpile_expr(args[0]), None
+            start, stop, step = "0", self.visit(args[0]), None
         elif len(args) == 2:
-            start, stop, step = self._transpile_expr(args[0]), self._transpile_expr(args[1]), None
+            start, stop, step = self.visit(args[0]), self.visit(args[1]), None
         elif len(args) == 3:
-            start = self._transpile_expr(args[0])
-            stop = self._transpile_expr(args[1])
-            step = self._transpile_expr(args[2])
+            start = self.visit(args[0])
+            stop = self.visit(args[1])
+            step = self.visit(args[2])
         else:
             raise TranspileError(
                 f"range() takes 1–3 arguments, got {len(args)}.\n"
@@ -232,116 +263,165 @@ class ASTWalker:
         continuing = f"{loop_var}++" if step is None else f"{loop_var} += {step}"
         header = f"for (var {loop_var}: i32 = {start}; {loop_var} < {stop}; {continuing})"
 
+        saved = self._indent
+        self._indent += 1
         lines = [f"{prefix}{header} {{"]
-        for s in stmt.body:
-            lines.extend(self._transpile_stmt(s, indent + 1))
+        for s in node.body:
+            lines.extend(self.visit(s))
+        self._indent = saved
         lines.append(f"{prefix}}}")
 
         self._type_env.pop(loop_var, None)
         return lines
 
-    def _transpile_expr(self, expr: ast.expr) -> str:  # noqa: PLR0911
-        if isinstance(expr, ast.Constant):
-            return _transpile_constant(expr)
-        if isinstance(expr, ast.Name):
-            return expr.id
-        if isinstance(expr, ast.BinOp):
-            return self._transpile_binop(expr)
-        if isinstance(expr, ast.UnaryOp):
-            return self._transpile_unaryop(expr)
-        if isinstance(expr, ast.Compare):
-            return self._transpile_compare(expr)
-        if isinstance(expr, ast.BoolOp):
-            return self._transpile_boolop(expr)
-        if isinstance(expr, ast.Subscript):
-            val = self._transpile_expr(expr.value)
-            idx = self._transpile_expr(expr.slice)
-            return f"{val}[{idx}]"
-        if isinstance(expr, ast.Attribute):
-            obj = self._transpile_expr(expr.value)
-            return f"{obj}.{expr.attr}"
-        if isinstance(expr, ast.Call):
-            return self._transpile_call(expr)
+    def visit_Expr(self, node: ast.Expr) -> list[str]:
+        prefix = "    " * self._indent
+        return [f"{prefix}{self.visit(node.value)};"]
 
+    def visit_Pass(self, node: ast.Pass) -> list[str]:
+        return []
+
+    # ------------------------------------------------------------------
+    # Expression visitors (return str)
+    # ------------------------------------------------------------------
+
+    def visit_Constant(self, node: ast.Constant) -> str:
+        val = node.value
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        if isinstance(val, int):
+            return str(val)
+        if isinstance(val, float):
+            s = repr(val)
+            if "." not in s and "e" not in s:
+                s += ".0"
+            return s
         raise TranspileError(
-            f"Unsupported expression {type(expr).__name__!r} in {self._kfn.__name__!r}.\n"
-            f"Supported: literals, names, arithmetic, comparisons, "
-            f"array indexing, attribute access, function calls.\n"
+            f"Unsupported literal type {type(val).__name__!r}: {val!r}.\n"
+            f"Supported literal types: int, float, bool.\n"
             f"Open an issue: {ISSUES_URL}"
         )
 
-    def _transpile_binop(self, expr: ast.BinOp) -> str:
-        op = _BINOP_MAP.get(type(expr.op))
+    def visit_Name(self, node: ast.Name) -> str:
+        return node.id
+
+    def visit_BinOp(self, node: ast.BinOp) -> str:
+        op = _BINOP_MAP.get(type(node.op))
         if op is None:
             raise TranspileError(
-                f"Unsupported binary operator {type(expr.op).__name__!r}.\n"
+                f"Unsupported binary operator {type(node.op).__name__!r}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        left = self._transpile_expr(expr.left)
-        right = self._transpile_expr(expr.right)
+
+        lt = self._infer_type(node.left)
+        rt = self._infer_type(node.right)
+        if (
+            lt is not None
+            and rt is not None
+            and lt in _SCALAR_TYPES
+            and rt in _SCALAR_TYPES
+            and lt != rt
+        ):
+            raise TranspileError(
+                f"Type mismatch in {self._kfn.__name__!r}: "
+                f"'{op}' applied to {lt!r} (left) and {rt!r} (right).\n"
+                f"Cast one operand explicitly: np.<type>(value).\n"
+                f"Open an issue: {ISSUES_URL}"
+            )
+
+        left = self.visit(node.left)
+        right = self.visit(node.right)
         return f"({left} {op} {right})"
 
-    def _transpile_unaryop(self, expr: ast.UnaryOp) -> str:
-        operand = self._transpile_expr(expr.operand)
-        if isinstance(expr.op, ast.Not):
+    def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+        operand = self.visit(node.operand)
+        if isinstance(node.op, ast.Not):
             return f"!({operand})"
-        if isinstance(expr.op, ast.USub):
+        if isinstance(node.op, ast.USub):
             return f"-{operand}"
-        if isinstance(expr.op, ast.Invert):
+        if isinstance(node.op, ast.Invert):
             return f"~({operand})"
-        if isinstance(expr.op, ast.UAdd):
+        if isinstance(node.op, ast.UAdd):
             return operand
         raise TranspileError(
-            f"Unsupported unary operator {type(expr.op).__name__!r}.\n"
+            f"Unsupported unary operator {type(node.op).__name__!r}.\n"
             f"Open an issue: {ISSUES_URL}"
         )
 
-    def _transpile_compare(self, expr: ast.Compare) -> str:
-        if len(expr.ops) != 1:
+    def visit_Compare(self, node: ast.Compare) -> str:
+        if len(node.ops) != 1:
             raise TranspileError(
                 f"Chained comparisons (e.g. a < b < c) are not supported.\n"
                 f"Split into separate comparisons joined with 'and'.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        op = _CMPOP_MAP.get(type(expr.ops[0]))
+        op = _CMPOP_MAP.get(type(node.ops[0]))
         if op is None:
             raise TranspileError(
-                f"Unsupported comparison operator {type(expr.ops[0]).__name__!r}.\n"
+                f"Unsupported comparison operator {type(node.ops[0]).__name__!r}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        left = self._transpile_expr(expr.left)
-        right = self._transpile_expr(expr.comparators[0])
+
+        lt = self._infer_type(node.left)
+        rt = self._infer_type(node.comparators[0])
+        if (
+            lt is not None
+            and rt is not None
+            and lt in _SCALAR_TYPES
+            and rt in _SCALAR_TYPES
+            and lt != rt
+        ):
+            raise TranspileError(
+                f"Type mismatch in {self._kfn.__name__!r}: "
+                f"'{op}' compares {lt!r} (left) with {rt!r} (right).\n"
+                f"Cast one operand explicitly: np.<type>(value).\n"
+                f"Open an issue: {ISSUES_URL}"
+            )
+
+        left = self.visit(node.left)
+        right = self.visit(node.comparators[0])
         return f"({left} {op} {right})"
 
-    def _transpile_boolop(self, expr: ast.BoolOp) -> str:
-        op = "&&" if isinstance(expr.op, ast.And) else "||"
-        parts = [self._transpile_expr(v) for v in expr.values]
+    def visit_BoolOp(self, node: ast.BoolOp) -> str:
+        op = "&&" if isinstance(node.op, ast.And) else "||"
+        parts = [self.visit(v) for v in node.values]
         return f"({f' {op} '.join(parts)})"
 
-    def _transpile_call(self, expr: ast.Call) -> str:
-        if expr.keywords:
+    def visit_Subscript(self, node: ast.Subscript) -> str:
+        val = self.visit(node.value)
+        idx = self.visit(node.slice)
+        return f"{val}[{idx}]"
+
+    def visit_Attribute(self, node: ast.Attribute) -> str:
+        obj = self.visit(node.value)
+        return f"{obj}.{node.attr}"
+
+    def visit_Call(self, node: ast.Call) -> str:
+        if node.keywords:
             raise TranspileError(
                 f"Keyword arguments in function calls are not supported in @gpu_kernel.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
-        args_str = ", ".join(self._transpile_expr(a) for a in expr.args)
+        args_str = ", ".join(self.visit(a) for a in node.args)
 
+        # np.uint32(x), np.float32(x), etc.
         if (
-            isinstance(expr.func, ast.Attribute)
-            and isinstance(expr.func.value, ast.Name)
-            and expr.func.value.id == "np"
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "np"
         ):
-            cast = _NP_TYPE_MAP.get(expr.func.attr)
+            cast = _NP_TYPE_MAP.get(node.func.attr)
             if cast:
                 return f"{cast}({args_str})"
             raise TranspileError(
-                f"Unsupported numpy call np.{expr.func.attr} in @gpu_kernel.\n"
+                f"Unsupported numpy call np.{node.func.attr} in @gpu_kernel.\n"
                 f"Supported numpy casts: {', '.join(f'np.{k}' for k in _NP_TYPE_MAP)}.\n"
                 f"Open an issue: {ISSUES_URL}"
             )
 
-        if isinstance(expr.func, ast.Name):
-            fn_name = expr.func.id
+        # Simple name call
+        if isinstance(node.func, ast.Name):
+            fn_name = node.func.id
             if fn_name == "range":
                 raise TranspileError(
                     f"range() is only valid as the iterator in a for loop.\n"
@@ -350,9 +430,10 @@ class ASTWalker:
             wgsl_fn = _BUILTIN_FN_MAP.get(fn_name, fn_name)
             return f"{wgsl_fn}({args_str})"
 
-        if isinstance(expr.func, ast.Attribute):
-            obj_str = self._transpile_expr(expr.func.value)
-            return f"{obj_str}.{expr.func.attr}({args_str})"
+        # Attribute call: obj.method(...)
+        if isinstance(node.func, ast.Attribute):
+            obj_str = self.visit(node.func.value)
+            return f"{obj_str}.{node.func.attr}({args_str})"
 
         raise TranspileError(
             f"Unsupported call form in {self._kfn.__name__!r}.\n"

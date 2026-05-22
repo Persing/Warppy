@@ -586,3 +586,111 @@ class TestBuilderIntegration:
 
         assert isinstance(v1_shader, CompiledShader)
         assert isinstance(v2_shader, CompiledShader)
+
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+
+def _wgsl(kernel_fn, workgroup_size: int = 256) -> str:
+    """Helper: transpile a @gpu_kernel function to WGSL."""
+    return kernel_fn.to_wgsl(workgroup_size)
+
+
+class TestTypeChecking:
+    """Expression-level type mismatch detection (§6.1)."""
+
+    def test_binop_same_type_passes(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], b: Array[np.uint32], out: Array[np.uint32]) -> None:
+            out[idx] = a[idx] + b[idx]
+
+        _wgsl(k)  # must not raise
+
+    def test_binop_u32_plus_f32_raises(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], b: Array[np.float32], out: Array[np.uint32]) -> None:
+            out[idx] = a[idx] + b[idx]
+
+        with pytest.raises(TranspileError, match="Type mismatch"):
+            _wgsl(k)
+
+    def test_binop_i32_plus_u32_raises(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.int32], b: Array[np.uint32], out: Array[np.int32]) -> None:
+            out[idx] = a[idx] + b[idx]
+
+        with pytest.raises(TranspileError, match="Type mismatch"):
+            _wgsl(k)
+
+    def test_binop_int_literal_compatible(self):
+        """Integer literals are abstract — compatible with any integer type."""
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], out: Array[np.uint32]) -> None:
+            out[idx] = a[idx] + 5
+
+        _wgsl(k)  # must not raise
+
+    def test_compare_same_type_passes(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], out: Array[np.uint32]) -> None:
+            if a[idx] == a[idx]:
+                out[idx] = np.uint32(1)
+
+        _wgsl(k)  # must not raise
+
+    def test_compare_mixed_types_raises(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], b: Array[np.float32], out: Array[np.uint32]) -> None:
+            if a[idx] == b[idx]:
+                out[idx] = np.uint32(1)
+
+        with pytest.raises(TranspileError, match="Type mismatch"):
+            _wgsl(k)
+
+    def test_ann_assign_type_match_passes(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], out: Array[np.uint32]) -> None:
+            x: np.uint32 = a[idx]
+            out[idx] = x
+
+        _wgsl(k)  # must not raise
+
+    def test_ann_assign_type_mismatch_raises(self):
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.float32], out: Array[np.uint32]) -> None:
+            x: np.uint32 = a[idx]   # f32 value assigned to u32 var
+            out[idx] = x
+
+        with pytest.raises(TranspileError, match="Type mismatch"):
+            _wgsl(k)
+
+    def test_cast_resolves_mismatch(self):
+        """np.uint32(f32_value) satisfies a u32 annotation."""
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.float32], out: Array[np.uint32]) -> None:
+            x: np.uint32 = np.uint32(a[idx])
+            out[idx] = x
+
+        _wgsl(k)  # must not raise
+
+    def test_nested_binop_inner_mismatch_raises(self):
+        """Mixed-type mismatch inside a sub-expression is caught."""
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], b: Array[np.float32], out: Array[np.uint32]) -> None:
+            out[idx] = a[idx] + (b[idx] * b[idx])  # inner ok, outer u32+f32
+
+        with pytest.raises(TranspileError, match="Type mismatch"):
+            _wgsl(k)
+
+    def test_error_message_names_both_types(self):
+        """Error message must contain both operand type names."""
+        @gpu_kernel
+        def k(idx: np.uint32, a: Array[np.uint32], b: Array[np.float32], out: Array[np.uint32]) -> None:
+            out[idx] = a[idx] + b[idx]
+
+        with pytest.raises(TranspileError) as exc_info:
+            _wgsl(k)
+        msg = str(exc_info.value)
+        assert "u32" in msg
+        assert "f32" in msg
